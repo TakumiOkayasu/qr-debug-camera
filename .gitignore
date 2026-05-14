@@ -1,0 +1,8 @@
+node_modules/
+logs/
+.runtime/
+.venv/
+.ruff_cache/
+.mypy_cache/
+__pycache__/
+assets/
