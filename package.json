@@ -1,0 +1,14 @@
+{
+  "name": "qr-debug-camera",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build:injected": "bun build browser/injected-camera.ts --target=browser --format=iife --outfile=src/qr_debug_camera/assets/injected-camera.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "typescript": "latest"
+  }
+}
