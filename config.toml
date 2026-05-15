@@ -22,5 +22,6 @@ device_label = "QR Debug Camera"
 [qr]
 log_path = "logs/qr-readings.jsonl"
 timezone = "Asia/Tokyo"
+encodings = ["utf-8", "cp932", "shift_jis", "euc_jp"]
 dedupe_ms = 1000
 exit_key = "q"

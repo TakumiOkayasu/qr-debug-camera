@@ -10,9 +10,11 @@ os.environ.setdefault("OPENCV_LOG_LEVEL", "ERROR")
 import cv2
 import mss
 import numpy as np
-from PySide6.QtCore import QRect
+import zxingcpp
 
+from qr_debug_camera.codec import decode_qr_bytes
 from qr_debug_camera.config import CameraConfig, QrConfig
+from qr_debug_camera.geometry import ScreenRect
 from qr_debug_camera.logger import timestamp
 
 
@@ -26,6 +28,9 @@ def _encode_png_data_url(image: np.ndarray) -> str:
 
 def _letterbox(image: np.ndarray, width: int, height: int) -> np.ndarray:
     source_height, source_width = image.shape[:2]
+    if source_width <= 0 or source_height <= 0:
+        return _blank_image(width, height)
+
     ratio = min(width / source_width, height / source_height)
     resized_width = max(1, int(source_width * ratio))
     resized_height = max(1, int(source_height * ratio))
@@ -35,6 +40,10 @@ def _letterbox(image: np.ndarray, width: int, height: int) -> np.ndarray:
     y = (height - resized_height) // 2
     canvas[y : y + resized_height, x : x + resized_width] = resized
     return canvas
+
+
+def _blank_image(width: int, height: int) -> np.ndarray:
+    return np.zeros((height, width, 3), dtype=np.uint8)
 
 
 def _crop_by_points(image: np.ndarray, points: np.ndarray) -> np.ndarray:
@@ -52,7 +61,22 @@ def _crop_by_points(image: np.ndarray, points: np.ndarray) -> np.ndarray:
     top = max(0, min_y - margin)
     right = min(width, max_x + margin)
     bottom = min(height, max_y + margin)
+    if right <= left or bottom <= top:
+        return image
     return image[top:bottom, left:right]
+
+
+def _zxing_points(barcode: Any) -> np.ndarray:
+    position = barcode.position
+    return np.array(
+        [
+            [position.top_left.x, position.top_left.y],
+            [position.top_right.x, position.top_right.y],
+            [position.bottom_right.x, position.bottom_right.y],
+            [position.bottom_left.x, position.bottom_left.y],
+        ],
+        dtype=np.float32,
+    )
 
 
 @dataclass
@@ -63,19 +87,72 @@ class QrCapture:
     def __post_init__(self) -> None:
         self._screen = mss.mss()
         self._detector = cv2.QRCodeDetector()
+        self._last_image: np.ndarray | None = None
 
-    def capture(self, rect: QRect) -> dict[str, Any]:
-        monitor = {
-            "left": rect.x(),
-            "top": rect.y(),
-            "width": rect.width(),
-            "height": rect.height(),
+    def _reset_screen(self) -> None:
+        try:
+            next_screen = mss.mss()
+        except Exception:
+            return
+
+        try:
+            self._screen.close()
+        except Exception:
+            pass
+        self._screen = next_screen
+
+    def _miss_frame(self, captured_at: str, image: np.ndarray | None = None) -> dict[str, Any]:
+        frame = image if image is not None else _blank_image(self.camera.width, self.camera.height)
+        return {
+            "status": "miss",
+            "imageDataUrl": _encode_png_data_url(
+                _letterbox(frame, self.camera.width, self.camera.height)
+            ),
+            "capturedAt": captured_at,
         }
-        shot = self._screen.grab(monitor)
+
+    def capture(self, rect: ScreenRect) -> dict[str, Any]:
+        captured_at = timestamp(self.qr.timezone)
+        monitor = {
+            "left": rect.x,
+            "top": rect.y,
+            "width": rect.width,
+            "height": rect.height,
+        }
+
+        try:
+            shot = self._screen.grab(monitor)
+        except Exception:
+            self._reset_screen()
+            return self._miss_frame(captured_at, self._last_image)
+
         bgra = np.asarray(shot)
         bgr = cv2.cvtColor(bgra, cv2.COLOR_BGRA2BGR)
-        payload, points, _ = self._detector.detectAndDecode(bgr)
-        captured_at = timestamp(self.qr.timezone)
+        self._last_image = bgr
+
+        try:
+            barcode = zxingcpp.read_barcode(
+                bgr,
+                formats=zxingcpp.QRCode,
+                text_mode=zxingcpp.TextMode.Plain,
+            )
+        except Exception:
+            barcode = None
+
+        if barcode and barcode.valid:
+            payload = decode_qr_bytes(bytes(barcode.bytes), self.qr.encodings)
+            qr_image = _crop_by_points(bgr, _zxing_points(barcode))
+            return {
+                "status": "ok",
+                "imageDataUrl": _encode_png_data_url(qr_image),
+                "capturedAt": captured_at,
+                "payload": payload,
+            }
+
+        try:
+            payload, points, _ = self._detector.detectAndDecode(bgr)
+        except (UnicodeError, cv2.error):
+            payload, points = "", None
 
         if payload and points is not None:
             qr_image = _crop_by_points(bgr, points.reshape(-1, 2))
@@ -86,10 +163,4 @@ class QrCapture:
                 "payload": payload,
             }
 
-        return {
-            "status": "miss",
-            "imageDataUrl": _encode_png_data_url(
-                _letterbox(bgr, self.camera.width, self.camera.height)
-            ),
-            "capturedAt": captured_at,
-        }
+        return self._miss_frame(captured_at, bgr)

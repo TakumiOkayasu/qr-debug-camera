@@ -34,5 +34,10 @@ class CdpClient:
                 raise RuntimeError(message["error"].get("message", "CDP command failed"))
             return message.get("result")
 
+    def send_no_wait(self, method: str, params: dict[str, Any] | None = None) -> None:
+        request_id = self._next_id
+        self._next_id += 1
+        self._ws.send(json.dumps({"id": request_id, "method": method, "params": params or {}}))
+
     def close(self) -> None:
         self._ws.close()

@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from PySide6.QtCore import QRect, Qt
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import QApplication, QWidget
 
 from qr_debug_camera.config import OverlayConfig
+from qr_debug_camera.geometry import ScreenRect
 
 
 class OverlayWindow(QWidget):
@@ -25,14 +26,14 @@ class OverlayWindow(QWidget):
         y = geometry.y() + (geometry.height() - config.height) // 2
         self.setGeometry(x, y, config.width, config.height)
 
-    def capture_rect(self) -> QRect:
+    def capture_rect(self) -> ScreenRect:
         geometry = self.geometry()
         border = self.config.border
-        return QRect(
-            geometry.x() + border,
-            geometry.y() + border,
-            max(1, geometry.width() - border * 2),
-            max(1, geometry.height() - border * 2),
+        return ScreenRect(
+            x=geometry.x() + border,
+            y=geometry.y() + border,
+            width=max(1, geometry.width() - border * 2),
+            height=max(1, geometry.height() - border * 2),
         )
 
     def paintEvent(self, _event: object) -> None:

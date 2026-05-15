@@ -46,13 +46,34 @@ class ChromeController:
         ]
         self.process = subprocess.Popen(args)
 
-    def connect(self) -> CdpClient:
-        websocket_url = self._wait_for_page_websocket_url()
+    def connect(self, timeout_seconds: float = 15.0) -> CdpClient:
+        websocket_url = self._wait_for_page_websocket_url(timeout_seconds=timeout_seconds)
         return CdpClient(websocket_url)
 
-    def stop(self) -> None:
+    def stop(self, cdp: CdpClient | None = None) -> None:
+        if cdp:
+            try:
+                cdp.send_no_wait("Browser.close")
+            except Exception:
+                pass
+
+        self._wait_for_exit(timeout_seconds=8.0)
         if self.process and self.process.poll() is None:
             self.process.terminate()
+            self._wait_for_exit(timeout_seconds=3.0)
+        if self.process and self.process.poll() is None:
+            self.process.kill()
+            self._wait_for_exit(timeout_seconds=1.0)
+
+    def _wait_for_exit(self, timeout_seconds: float) -> None:
+        if not self.process:
+            return
+
+        deadline = time.monotonic() + timeout_seconds
+        while time.monotonic() < deadline:
+            if self.process.poll() is not None:
+                return
+            time.sleep(0.05)
 
     def _wait_for_page_websocket_url(self, timeout_seconds: float = 15.0) -> str:
         deadline = time.monotonic() + timeout_seconds

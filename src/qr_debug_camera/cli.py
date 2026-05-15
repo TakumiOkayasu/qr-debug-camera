@@ -12,9 +12,10 @@ from PySide6.QtWidgets import QApplication
 from qr_debug_camera.capture import QrCapture
 from qr_debug_camera.chrome import ChromeController
 from qr_debug_camera.config import load_config
-from qr_debug_camera.injection import frame_expression, load_injected_camera_script
+from qr_debug_camera.injection import load_injected_camera_script
 from qr_debug_camera.logger import QrLogger
 from qr_debug_camera.overlay import OverlayWindow
+from qr_debug_camera.stream import BrowserFramePusher, FrameWorker
 
 
 def _start_exit_watcher(exit_key: str, exit_requested: threading.Event) -> None:
@@ -42,6 +43,8 @@ def main(argv: list[str] | None = None) -> int:
 
     chrome = ChromeController(config)
     cdp = None
+    pusher = None
+    worker = None
     exit_requested = threading.Event()
     _start_exit_watcher(config.qr.exit_key, exit_requested)
 
@@ -49,45 +52,39 @@ def main(argv: list[str] | None = None) -> int:
         chrome.start()
         cdp = chrome.connect()
         injected = load_injected_camera_script(config)
-        cdp.send("Page.enable")
-        cdp.send("Runtime.enable")
-        cdp.send("Page.addScriptToEvaluateOnNewDocument", {"source": injected})
-        cdp.send("Runtime.evaluate", {"expression": injected, "awaitPromise": False})
-        cdp.send("Page.navigate", {"url": config.chrome.target_url})
+        pusher = BrowserFramePusher(chrome, config, cdp, injected)
+        pusher.install(navigate=True)
 
         capture = QrCapture(config.camera, config.qr)
         logger = QrLogger(config.qr)
-        busy = False
+        worker = FrameWorker(
+            capture=capture,
+            logger=logger,
+            pusher=pusher,
+            rect=overlay.capture_rect(),
+            capture_fps=config.camera.capture_fps,
+        )
+        worker.start()
 
         def tick() -> None:
-            nonlocal busy
             if exit_requested.is_set():
                 app.quit()
-                return
-            if busy:
-                return
-
-            busy = True
-            try:
-                frame: dict[str, Any] = capture.capture(overlay.capture_rect())
-                if frame.get("status") == "ok" and isinstance(frame.get("payload"), str):
-                    logger.log(frame["payload"], str(frame["capturedAt"]))
-                cdp.send(
-                    "Runtime.evaluate",
-                    {"expression": frame_expression(frame), "awaitPromise": False},
-                )
-            except Exception as error:
-                print(error, flush=True)
-            finally:
-                busy = False
 
         timer = QTimer()
         timer.timeout.connect(tick)
-        timer.start(max(1, int(1000 / config.camera.capture_fps)))
+        timer.start(100)
         return app.exec()
     except KeyboardInterrupt:
         return 130
     finally:
-        if cdp:
-            cdp.close()
-        chrome.stop()
+        if worker:
+            worker.stop(timeout_seconds=8.0)
+        if pusher:
+            pusher.close()
+        else:
+            chrome.stop(cdp)
+            if cdp:
+                try:
+                    cdp.close()
+                except Exception:
+                    pass
