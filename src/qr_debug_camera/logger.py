@@ -50,4 +50,4 @@ class QrLogger:
         }
         with Path(self.config.log_path).open("a", encoding="utf-8") as file:
             file.write(json.dumps(record, ensure_ascii=False) + "\n")
-        print(f"{captured_at}\t{payload}", flush=True)
+        print(f"[{captured_at}]\t'{payload}'", flush=True)
